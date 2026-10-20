@@ -1,0 +1,166 @@
+name: Close JIRA ticket on PR merge
+
+# Triggered when a PR is merged into main/master.
+# Extracts the JIRA ticket ID from the PR title (e.g. PROJ-123: description),
+# transitions the ticket to Done, and posts a closing comment.
+#
+# Required GitHub secrets (Settings → Secrets → Actions):
+#   JIRA_URL    → https://your-org.atlassian.net
+#   JIRA_EMAIL  → your Atlassian login email
+#   JIRA_TOKEN  → your Atlassian API token
+#
+# If any secret is missing, the workflow skips gracefully without failing.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main, master]
+
+jobs:
+  jira-close:
+    name: Transition JIRA ticket to Done
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
+
+    steps:
+      # ── 1. Extract ticket ID from PR title ──────────────────────────────────
+      - name: Extract JIRA ticket ID
+        id: extract
+        run: |
+          TITLE="${{ github.event.pull_request.title }}"
+          TICKET=$(echo "$TITLE" | grep -oE '[A-Z]+-[0-9]+' | head -1)
+          if [ -z "$TICKET" ]; then
+            echo "No JIRA ticket ID found in PR title: $TITLE"
+            echo "found=false" >> $GITHUB_OUTPUT
+          else
+            echo "Ticket: $TICKET"
+            echo "found=true" >> $GITHUB_OUTPUT
+            echo "ticket=$TICKET" >> $GITHUB_OUTPUT
+          fi
+
+      # ── 2. Check secrets are configured ─────────────────────────────────────
+      - name: Check JIRA secrets
+        id: check
+        if: steps.extract.outputs.found == 'true'
+        env:
+          JIRA_URL: ${{ secrets.JIRA_URL }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_TOKEN: ${{ secrets.JIRA_TOKEN }}
+        run: |
+          if [ -z "$JIRA_URL" ] || [ -z "$JIRA_EMAIL" ] || [ -z "$JIRA_TOKEN" ]; then
+            echo "JIRA secrets not configured — skipping ticket update."
+            echo "To enable: add JIRA_URL, JIRA_EMAIL, JIRA_TOKEN to repo secrets."
+            echo "configured=false" >> $GITHUB_OUTPUT
+          else
+            echo "configured=true" >> $GITHUB_OUTPUT
+          fi
+
+      # ── 3. Find the "Done" transition ID ────────────────────────────────────
+      - name: Get available transitions
+        id: transitions
+        if: steps.extract.outputs.found == 'true' && steps.check.outputs.configured == 'true'
+        env:
+          JIRA_URL: ${{ secrets.JIRA_URL }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_TOKEN: ${{ secrets.JIRA_TOKEN }}
+        run: |
+          TICKET="${{ steps.extract.outputs.ticket }}"
+          RESPONSE=$(curl -sf \
+            -u "$JIRA_EMAIL:$JIRA_TOKEN" \
+            -H "Content-Type: application/json" \
+            "$JIRA_URL/rest/api/3/issue/$TICKET/transitions" 2>/dev/null || echo "{}")
+
+          TRANSITION_ID=$(echo "$RESPONSE" | python3 -c "
+          import json, sys
+          try:
+              data = json.load(sys.stdin)
+              # Accept any of these names (case-insensitive)
+              targets = {'done', 'completed', 'closed', 'resolved'}
+              for t in data.get('transitions', []):
+                  if t.get('name', '').lower() in targets:
+                      print(t['id'])
+                      break
+          except Exception:
+              pass
+          " 2>/dev/null || echo "")
+
+          if [ -z "$TRANSITION_ID" ]; then
+            echo "Could not find a Done/Completed/Closed transition for $TICKET."
+            echo "Available transitions:"
+            echo "$RESPONSE" | python3 -c "
+          import json, sys
+          try:
+              for t in json.load(sys.stdin).get('transitions', []):
+                  print(' -', t.get('name'))
+          except Exception:
+              pass
+            " 2>/dev/null || true
+            echo "found=false" >> $GITHUB_OUTPUT
+          else
+            echo "Transition ID: $TRANSITION_ID"
+            echo "found=true" >> $GITHUB_OUTPUT
+            echo "id=$TRANSITION_ID" >> $GITHUB_OUTPUT
+          fi
+
+      # ── 4. Transition the ticket to Done ────────────────────────────────────
+      - name: Transition ticket to Done
+        if: >
+          steps.extract.outputs.found == 'true' &&
+          steps.check.outputs.configured == 'true' &&
+          steps.transitions.outputs.found == 'true'
+        env:
+          JIRA_URL: ${{ secrets.JIRA_URL }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_TOKEN: ${{ secrets.JIRA_TOKEN }}
+        run: |
+          TICKET="${{ steps.extract.outputs.ticket }}"
+          TRANSITION_ID="${{ steps.transitions.outputs.id }}"
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
+            -u "$JIRA_EMAIL:$JIRA_TOKEN" \
+            -H "Content-Type: application/json" \
+            -X POST \
+            -d "{\"transition\":{\"id\":\"$TRANSITION_ID\"}}" \
+            "$JIRA_URL/rest/api/3/issue/$TICKET/transitions")
+          if [ "$HTTP" = "204" ]; then
+            echo "✓ $TICKET transitioned to Done"
+          else
+            echo "⚠ Transition returned HTTP $HTTP — check JIRA workflow permissions"
+          fi
+
+      # ── 5. Post closing comment ──────────────────────────────────────────────
+      - name: Post JIRA comment
+        if: steps.extract.outputs.found == 'true' && steps.check.outputs.configured == 'true'
+        env:
+          JIRA_URL: ${{ secrets.JIRA_URL }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_TOKEN: ${{ secrets.JIRA_TOKEN }}
+        run: |
+          TICKET="${{ steps.extract.outputs.ticket }}"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          PR_URL="${{ github.event.pull_request.html_url }}"
+          MERGED_BY="${{ github.event.pull_request.merged_by.login }}"
+
+          BODY=$(python3 -c "
+          import json
+          text = f'Closed by PR #{\"$PR_NUMBER\"}: $PR_TITLE\n{\"$PR_URL\"}\nMerged by: $MERGED_BY'
+          doc = {
+            'body': {
+              'type': 'doc', 'version': 1,
+              'content': [{'type': 'paragraph', 'content': [{'type': 'text', 'text': text}]}]
+            }
+          }
+          print(json.dumps(doc))
+          ")
+
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
+            -u "$JIRA_EMAIL:$JIRA_TOKEN" \
+            -H "Content-Type: application/json" \
+            -X POST \
+            -d "$BODY" \
+            "$JIRA_URL/rest/api/3/issue/$TICKET/comment")
+          if [ "$HTTP" = "201" ]; then
+            echo "✓ Comment posted to $TICKET"
+          else
+            echo "⚠ Comment returned HTTP $HTTP"
+          fi

@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# commit-msg hook — validates the commit message format
+# Enforces: JIRA ticket ID prefix
+# Install: scripts/setup-hooks.sh
+
+set -euo pipefail
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; NC='\033[0m'
+
+COMMIT_MSG_FILE="$1"
+COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
+
+# Skip merge commits and fixup commits
+if echo "$COMMIT_MSG" | grep -qE '^(Merge|fixup!|squash!)'; then
+  exit 0
+fi
+
+# ── JIRA ticket ID format ────────────────────────────────────────────────────
+# Expected format: PROJ-123: description
+# Update JIRA_PATTERN to match your project's ticket prefix (e.g. MYAPP-\d+)
+#
+JIRA_PATTERN='^[A-Z][A-Z0-9]+-[0-9]+: .+'
+
+if ! echo "$COMMIT_MSG" | grep -qE "$JIRA_PATTERN"; then
+  echo -e "${RED}✗ Commit message does not include a JIRA ticket ID.${NC}"
+  echo ""
+  echo "  Expected format:  PROJ-123: description of change"
+  echo "  Your message:     $COMMIT_MSG"
+  echo ""
+  echo "  Update JIRA_PATTERN in scripts/hooks/commit-msg if your"
+  echo "  project uses a different prefix."
+  exit 1
+fi
+
+echo -e "${GREEN}✓ commit-msg passed${NC}"
+exit 0

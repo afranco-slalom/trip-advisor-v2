@@ -1,0 +1,65 @@
+# Triage Agent — Azure DevOps pipeline
+#
+# Triggers when your main pipeline fails (via pipeline resource trigger).
+# Posts a diagnosis to the PR and optionally applies safe fixes.
+#
+# Setup:
+#   1. Copy this file to your project's azure-pipelines-triage.yml
+#   2. Set the pipeline resource name to match your main pipeline (line 17)
+#   3. Add ANTHROPIC_API_KEY as a secret pipeline variable
+#   4. Add JIRA_URL, JIRA_EMAIL, JIRA_TOKEN as secret variables (optional)
+#   5. Run in observation mode for 2 weeks, then set TRIAGE_OBSERVATION_MODE: false
+
+trigger: none  # only runs via pipeline resource trigger below
+
+resources:
+  pipelines:
+    - pipeline: main-ci        # ← change to your main pipeline's resource name
+      source: "CI Pipeline"    # ← change to your main pipeline's display name
+      trigger:
+        branches:
+          include: ["*"]
+        stages: []
+        failed: true           # only trigger on failure
+
+variables:
+  TRIAGE_OBSERVATION_MODE: "true"   # set to "false" after validation period
+  TRIAGE_ENVIRONMENT: "dev"
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    persistCredentials: true
+
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: "3.11"
+
+  - script: pip install -r requirements.txt
+    displayName: Install dependencies
+
+  - script: python scripts/triage_agent.py
+    displayName: Run triage agent
+    env:
+      ANTHROPIC_API_KEY:       $(ANTHROPIC_API_KEY)
+      GITHUB_TOKEN:            ""
+      GITHUB_REPO:             ""
+      GITHUB_RUN_ID:           $(resources.pipeline.main-ci.runID)
+      GITHUB_BRANCH:           $(Build.SourceBranchName)
+      PR_NUMBER:               $(System.PullRequest.PullRequestNumber)
+      JIRA_URL:                $(JIRA_URL)
+      JIRA_EMAIL:              $(JIRA_EMAIL)
+      JIRA_TOKEN:              $(JIRA_TOKEN)
+      AZURE_ORG_URL:           $(System.TeamFoundationCollectionUri)
+      AZURE_PROJECT:           $(System.TeamProject)
+      AZURE_PAT:               $(AZURE_PAT)
+      TRIAGE_OBSERVATION_MODE: $(TRIAGE_OBSERVATION_MODE)
+      TRIAGE_ENVIRONMENT:      $(TRIAGE_ENVIRONMENT)
+
+  - script: |
+      git config user.name "Triage Agent"
+      git config user.email "triage-agent@noreply.azure.com"
+    displayName: Configure git for auto-fix
+    condition: and(succeeded(), eq(variables.TRIAGE_OBSERVATION_MODE, 'false'))

@@ -1,0 +1,71 @@
+# Triage Agent — GitHub Actions workflow
+#
+# Triggers automatically when your main CI workflow fails.
+# Posts a diagnosis to the PR and optionally applies safe fixes.
+#
+# Setup:
+#   1. Copy this file to your project's .github/workflows/triage.yml
+#   2. Set TRIAGE_CI_WORKFLOW_NAME to match your CI workflow's name (line 12)
+#   3. Add ANTHROPIC_API_KEY to your repo secrets
+#   4. Add JIRA_URL, JIRA_EMAIL, JIRA_TOKEN to secrets (optional — for JIRA comments)
+#   5. Run in observation mode for 2 weeks, then set TRIAGE_OBSERVATION_MODE: "false"
+
+name: Triage Agent
+
+on:
+  workflow_run:
+    workflows: ["CI"]        # ← change to your CI workflow's exact name
+    types: [completed]
+
+jobs:
+  triage:
+    # Only run when the CI workflow failed
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # needed to commit and push auto-fixes
+      pull-requests: write   # needed to post PR comments
+      actions: read          # needed to fetch run logs
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          # Use a token with write access if auto-fix is enabled
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Copy framework skills (if not already present)
+        run: |
+          if [ ! -d ".claude/skills" ]; then
+            mkdir -p .claude/skills
+          fi
+
+      - name: Run triage agent
+        env:
+          ANTHROPIC_API_KEY:        ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN:             ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO:              ${{ github.repository }}
+          GITHUB_RUN_ID:            ${{ github.event.workflow_run.id }}
+          GITHUB_BRANCH:            ${{ github.event.workflow_run.head_branch }}
+          PR_NUMBER:                ${{ github.event.workflow_run.pull_requests[0].number }}
+          JIRA_URL:                 ${{ secrets.JIRA_URL }}
+          JIRA_EMAIL:               ${{ secrets.JIRA_EMAIL }}
+          JIRA_TOKEN:               ${{ secrets.JIRA_TOKEN }}
+          TRIAGE_ENVIRONMENT:       "dev"    # change to "staging" or "prod" per branch
+          TRIAGE_OBSERVATION_MODE:  "true"   # set to "false" after validation period
+        run: python scripts/triage_agent.py
+
+      - name: Configure git for auto-fix commits
+        if: env.TRIAGE_OBSERVATION_MODE == 'false'
+        run: |
+          git config user.name  "Triage Agent"
+          git config user.email "triage-agent@noreply.github.com"

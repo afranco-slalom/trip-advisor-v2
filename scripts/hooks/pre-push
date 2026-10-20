@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# pre-push hook — runs before every push
+# Runs: build, lint, type check, unit tests
+# Configure PROJECT_CHECKS below for your tech stack.
+# Install: scripts/setup-hooks.sh
+
+set -euo pipefail
+
+RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'; NC='\033[0m'
+
+echo "pre-push: running preflight checks..."
+
+FAILED=0
+
+run_check() {
+  local name="$1"; local cmd="$2"
+  echo -n "  Checking $name... "
+  if eval "$cmd" > /tmp/preflight-output 2>&1; then
+    echo -e "${GREEN}✓${NC}"
+  else
+    echo -e "${RED}✗${NC}"
+    echo -e "${RED}  $name failed:${NC}"
+    cat /tmp/preflight-output | sed 's/^/    /'
+    FAILED=1
+  fi
+}
+
+# ── Configure for your project ───────────────────────────────────────────────
+# Uncomment and adjust the commands that apply to your tech stack.
+# Each run_check call: name, shell command (non-zero exit = failure)
+
+# Node / TypeScript
+# run_check "dependencies"  "npm ci --prefer-offline"
+# run_check "build"         "npm run build"
+# run_check "lint"          "npm run lint"
+# run_check "type check"    "npx tsc --noEmit"
+# run_check "unit tests"    "npm run test:unit"
+
+# Python
+# run_check "dependencies"  "pip install -r requirements.txt -q"
+# run_check "lint"          "ruff check ."
+# run_check "type check"    "mypy ."
+# run_check "unit tests"    "pytest tests/unit -q"
+
+# Docker
+# run_check "docker build"  "docker build -t app-preflight . -q"
+
+# ── Env var check ─────────────────────────────────────────────────────────────
+# Add required env vars to REQUIRED_ENV. Push is blocked if any are missing.
+REQUIRED_ENV=()
+# REQUIRED_ENV=("DATABASE_URL" "API_KEY" "NODE_ENV")
+
+for var in "${REQUIRED_ENV[@]}"; do
+  if [ -z "${!var:-}" ]; then
+    echo -e "${RED}  ✗ Required env var not set: $var${NC}"
+    FAILED=1
+  fi
+done
+
+# ── Result ────────────────────────────────────────────────────────────────────
+if [ $FAILED -eq 1 ]; then
+  echo ""
+  echo -e "${RED}pre-push blocked. Fix the issues above before pushing.${NC}"
+  echo "  To skip (use only in emergencies): git push --no-verify"
+  exit 1
+fi
+
+echo -e "${GREEN}✓ All preflight checks passed. Pushing...${NC}"
+exit 0

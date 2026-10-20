@@ -1,0 +1,29 @@
+{
+  "mcpServers": {
+    "jira": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-server-atlassian"],
+      "env": {
+        "ATLASSIAN_URL": "https://your-domain.atlassian.net",
+        "ATLASSIAN_EMAIL": "your-email@example.com",
+        "ATLASSIAN_TOKEN": "REPLACE_ME_LOCALLY_DO_NOT_COMMIT"
+      }
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "your-github-token-here"
+      }
+    },
+    "_azure-devops-REMOVE-UNDERSCORE-TO-ENABLE": {
+      "command": "python",
+      "args": ["scripts/azure_devops_mcp.py"],
+      "env": {
+        "AZURE_ORG_URL": "https://dev.azure.com/your-org",
+        "AZURE_PROJECT": "your-project-name",
+        "AZURE_PAT": "your-azure-pat-here"
+      }
+    }
+  }
+}
